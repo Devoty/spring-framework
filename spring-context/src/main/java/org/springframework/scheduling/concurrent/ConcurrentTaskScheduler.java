@@ -206,19 +206,18 @@ public class ConcurrentTaskScheduler extends ConcurrentTaskExecutor implements T
 			}
 		}
 		catch (RejectedExecutionException ex) {
-			throw new TaskRejectedException("Executor [" + this.scheduledExecutor + "] did not accept task: " + task, ex);
+			throw new TaskRejectedException(this.scheduledExecutor, task, ex);
 		}
 	}
 
 	@Override
 	public ScheduledFuture<?> schedule(Runnable task, Instant startTime) {
-		Duration initialDelay = Duration.between(this.clock.instant(), startTime);
+		Duration delay = Duration.between(this.clock.instant(), startTime);
 		try {
-			return this.scheduledExecutor.schedule(decorateTask(task, false),
-					NANO.convert(initialDelay), NANO);
+			return this.scheduledExecutor.schedule(decorateTask(task, false), NANO.convert(delay), NANO);
 		}
 		catch (RejectedExecutionException ex) {
-			throw new TaskRejectedException("Executor [" + this.scheduledExecutor + "] did not accept task: " + task, ex);
+			throw new TaskRejectedException(this.scheduledExecutor, task, ex);
 		}
 	}
 
@@ -230,7 +229,7 @@ public class ConcurrentTaskScheduler extends ConcurrentTaskExecutor implements T
 					NANO.convert(initialDelay), NANO.convert(period), NANO);
 		}
 		catch (RejectedExecutionException ex) {
-			throw new TaskRejectedException("Executor [" + this.scheduledExecutor + "] did not accept task: " + task, ex);
+			throw new TaskRejectedException(this.scheduledExecutor, task, ex);
 		}
 	}
 
@@ -241,7 +240,7 @@ public class ConcurrentTaskScheduler extends ConcurrentTaskExecutor implements T
 					0, NANO.convert(period), NANO);
 		}
 		catch (RejectedExecutionException ex) {
-			throw new TaskRejectedException("Executor [" + this.scheduledExecutor + "] did not accept task: " + task, ex);
+			throw new TaskRejectedException(this.scheduledExecutor, task, ex);
 		}
 	}
 
@@ -253,7 +252,7 @@ public class ConcurrentTaskScheduler extends ConcurrentTaskExecutor implements T
 					NANO.convert(initialDelay), NANO.convert(delay), NANO);
 		}
 		catch (RejectedExecutionException ex) {
-			throw new TaskRejectedException("Executor [" + this.scheduledExecutor + "] did not accept task: " + task, ex);
+			throw new TaskRejectedException(this.scheduledExecutor, task, ex);
 		}
 	}
 
@@ -264,7 +263,7 @@ public class ConcurrentTaskScheduler extends ConcurrentTaskExecutor implements T
 					0, NANO.convert(delay), NANO);
 		}
 		catch (RejectedExecutionException ex) {
-			throw new TaskRejectedException("Executor [" + this.scheduledExecutor + "] did not accept task: " + task, ex);
+			throw new TaskRejectedException(this.scheduledExecutor, task, ex);
 		}
 	}
 

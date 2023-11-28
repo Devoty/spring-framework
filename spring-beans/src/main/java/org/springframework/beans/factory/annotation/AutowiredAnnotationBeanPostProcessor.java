@@ -17,6 +17,7 @@
 package org.springframework.beans.factory.annotation;
 
 import java.beans.PropertyDescriptor;
+import java.io.IOException;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
@@ -79,6 +80,10 @@ import org.springframework.core.PriorityOrdered;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.annotation.MergedAnnotation;
 import org.springframework.core.annotation.MergedAnnotations;
+import org.springframework.core.type.AnnotationMetadata;
+import org.springframework.core.type.MethodMetadata;
+import org.springframework.core.type.classreading.MetadataReaderFactory;
+import org.springframework.core.type.classreading.SimpleMetadataReaderFactory;
 import org.springframework.javapoet.ClassName;
 import org.springframework.javapoet.CodeBlock;
 import org.springframework.lang.Nullable;
@@ -167,6 +172,9 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 	@Nullable
 	private ConfigurableListableBeanFactory beanFactory;
 
+	@Nullable
+	private MetadataReaderFactory metadataReaderFactory;
+
 	private final Set<String> lookupMethodsChecked = Collections.newSetFromMap(new ConcurrentHashMap<>(256));
 
 	private final Map<Class<?>, Constructor<?>[]> candidateConstructorsCache = new ConcurrentHashMap<>(256);
@@ -185,9 +193,10 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 		this.autowiredAnnotationTypes.add(Autowired.class);
 		this.autowiredAnnotationTypes.add(Value.class);
 
+		ClassLoader classLoader = AutowiredAnnotationBeanPostProcessor.class.getClassLoader();
 		try {
 			this.autowiredAnnotationTypes.add((Class<? extends Annotation>)
-					ClassUtils.forName("jakarta.inject.Inject", AutowiredAnnotationBeanPostProcessor.class.getClassLoader()));
+					ClassUtils.forName("jakarta.inject.Inject", classLoader));
 			logger.trace("'jakarta.inject.Inject' annotation found and supported for autowiring");
 		}
 		catch (ClassNotFoundException ex) {
@@ -196,7 +205,7 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 
 		try {
 			this.autowiredAnnotationTypes.add((Class<? extends Annotation>)
-					ClassUtils.forName("javax.inject.Inject", AutowiredAnnotationBeanPostProcessor.class.getClassLoader()));
+					ClassUtils.forName("javax.inject.Inject", classLoader));
 			logger.trace("'javax.inject.Inject' annotation found and supported for autowiring");
 		}
 		catch (ClassNotFoundException ex) {
@@ -271,6 +280,7 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 					"AutowiredAnnotationBeanPostProcessor requires a ConfigurableListableBeanFactory: " + beanFactory);
 		}
 		this.beanFactory = clbf;
+		this.metadataReaderFactory = new SimpleMetadataReaderFactory(clbf.getBeanClassLoader());
 	}
 
 
@@ -539,12 +549,11 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 			return InjectionMetadata.EMPTY;
 		}
 
-		List<InjectionMetadata.InjectedElement> elements = new ArrayList<>();
+		final List<InjectionMetadata.InjectedElement> elements = new ArrayList<>();
 		Class<?> targetClass = clazz;
 
 		do {
-			final List<InjectionMetadata.InjectedElement> currElements = new ArrayList<>();
-
+			final List<InjectionMetadata.InjectedElement> fieldElements = new ArrayList<>();
 			ReflectionUtils.doWithLocalFields(targetClass, field -> {
 				MergedAnnotation<?> ann = findAutowiredAnnotation(field);
 				if (ann != null) {
@@ -555,10 +564,11 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 						return;
 					}
 					boolean required = determineRequiredStatus(ann);
-					currElements.add(new AutowiredFieldElement(field, required));
+					fieldElements.add(new AutowiredFieldElement(field, required));
 				}
 			});
 
+			final List<InjectionMetadata.InjectedElement> methodElements = new ArrayList<>();
 			ReflectionUtils.doWithLocalMethods(targetClass, method -> {
 				Method bridgedMethod = BridgeMethodResolver.findBridgedMethod(method);
 				if (!BridgeMethodResolver.isVisibilityBridgeMethodPair(method, bridgedMethod)) {
@@ -573,6 +583,10 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 						return;
 					}
 					if (method.getParameterCount() == 0) {
+						if (method.getDeclaringClass().isRecord()) {
+							// Annotations on the compact constructor arguments made available on accessors, ignoring.
+							return;
+						}
 						if (logger.isInfoEnabled()) {
 							logger.info("Autowired annotation should only be used on methods with parameters: " +
 									method);
@@ -580,11 +594,12 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 					}
 					boolean required = determineRequiredStatus(ann);
 					PropertyDescriptor pd = BeanUtils.findPropertyForMethod(bridgedMethod, clazz);
-					currElements.add(new AutowiredMethodElement(method, required, pd));
+					methodElements.add(new AutowiredMethodElement(method, required, pd));
 				}
 			});
 
-			elements.addAll(0, currElements);
+			elements.addAll(0, sortMethodElements(methodElements, targetClass));
+			elements.addAll(0, fieldElements);
 			targetClass = targetClass.getSuperclass();
 		}
 		while (targetClass != null && targetClass != Object.class);
@@ -618,6 +633,47 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 	}
 
 	/**
+	 * Sort the method elements via ASM for deterministic declaration order if possible.
+	 */
+	private List<InjectionMetadata.InjectedElement> sortMethodElements(
+			List<InjectionMetadata.InjectedElement> methodElements, Class<?> targetClass) {
+
+		if (this.metadataReaderFactory != null && methodElements.size() > 1) {
+			// Try reading the class file via ASM for deterministic declaration order...
+			// Unfortunately, the JVM's standard reflection returns methods in arbitrary
+			// order, even between different runs of the same application on the same JVM.
+			try {
+				AnnotationMetadata asm =
+						this.metadataReaderFactory.getMetadataReader(targetClass.getName()).getAnnotationMetadata();
+				Set<MethodMetadata> asmMethods = asm.getAnnotatedMethods(Autowired.class.getName());
+				if (asmMethods.size() >= methodElements.size()) {
+					List<InjectionMetadata.InjectedElement> candidateMethods = new ArrayList<>(methodElements);
+					List<InjectionMetadata.InjectedElement> selectedMethods = new ArrayList<>(asmMethods.size());
+					for (MethodMetadata asmMethod : asmMethods) {
+						for (Iterator<InjectionMetadata.InjectedElement> it = candidateMethods.iterator(); it.hasNext();) {
+							InjectionMetadata.InjectedElement element = it.next();
+							if (element.getMember().getName().equals(asmMethod.getMethodName())) {
+								selectedMethods.add(element);
+								it.remove();
+								break;
+							}
+						}
+					}
+					if (selectedMethods.size() == methodElements.size()) {
+						// All reflection-detected methods found in ASM method set -> proceed
+						return selectedMethods;
+					}
+				}
+			}
+			catch (IOException ex) {
+				logger.debug("Failed to read class file via ASM for determining @Autowired method order", ex);
+				// No worries, let's continue with the reflection metadata we started with...
+			}
+		}
+		return methodElements;
+	}
+
+	/**
 	 * Register the specified bean as dependent on the autowired beans.
 	 */
 	private void registerDependentBeans(@Nullable String beanName, Set<String> autowiredBeanNames) {
@@ -638,7 +694,7 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 	 * Resolve the specified cached method argument or field value.
 	 */
 	@Nullable
-	private Object resolvedCachedArgument(@Nullable String beanName, @Nullable Object cachedArgument) {
+	private Object resolveCachedArgument(@Nullable String beanName, @Nullable Object cachedArgument) {
 		if (cachedArgument instanceof DependencyDescriptor descriptor) {
 			Assert.state(this.beanFactory != null, "No BeanFactory available");
 			return this.beanFactory.resolveDependency(descriptor, beanName, null, null);
@@ -683,10 +739,12 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 			Object value;
 			if (this.cached) {
 				try {
-					value = resolvedCachedArgument(beanName, this.cachedFieldValue);
+					value = resolveCachedArgument(beanName, this.cachedFieldValue);
 				}
-				catch (NoSuchBeanDefinitionException ex) {
-					// Unexpected removal of target bean for cached argument -> re-resolve
+				catch (BeansException ex) {
+					// Unexpected target bean mismatch for cached argument -> re-resolve
+					this.cached = false;
+					logger.debug("Failed to resolve cached argument", ex);
 					value = resolveFieldValue(field, bean, beanName);
 				}
 			}
@@ -703,7 +761,7 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 		private Object resolveFieldValue(Field field, Object bean, @Nullable String beanName) {
 			DependencyDescriptor desc = new DependencyDescriptor(field, this.required);
 			desc.setContainingClass(bean.getClass());
-			Set<String> autowiredBeanNames = new LinkedHashSet<>(1);
+			Set<String> autowiredBeanNames = new LinkedHashSet<>(2);
 			Assert.state(beanFactory != null, "No BeanFactory available");
 			TypeConverter typeConverter = beanFactory.getTypeConverter();
 			Object value;
@@ -715,21 +773,23 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 			}
 			synchronized (this) {
 				if (!this.cached) {
-					Object cachedFieldValue = null;
 					if (value != null || this.required) {
-						cachedFieldValue = desc;
+						Object cachedFieldValue = desc;
 						registerDependentBeans(beanName, autowiredBeanNames);
 						if (value != null && autowiredBeanNames.size() == 1) {
 							String autowiredBeanName = autowiredBeanNames.iterator().next();
 							if (beanFactory.containsBean(autowiredBeanName) &&
 									beanFactory.isTypeMatch(autowiredBeanName, field.getType())) {
-								cachedFieldValue = new ShortcutDependencyDescriptor(
-										desc, autowiredBeanName, field.getType());
+								cachedFieldValue = new ShortcutDependencyDescriptor(desc, autowiredBeanName);
 							}
 						}
+						this.cachedFieldValue = cachedFieldValue;
+						this.cached = true;
 					}
-					this.cachedFieldValue = cachedFieldValue;
-					this.cached = true;
+					else {
+						this.cachedFieldValue = null;
+						// cached flag remains false
+					}
 				}
 			}
 			return value;
@@ -760,10 +820,12 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 			Object[] arguments;
 			if (this.cached) {
 				try {
-					arguments = resolveCachedArguments(beanName);
+					arguments = resolveCachedArguments(beanName, this.cachedMethodArguments);
 				}
-				catch (NoSuchBeanDefinitionException ex) {
-					// Unexpected removal of target bean for cached argument -> re-resolve
+				catch (BeansException ex) {
+					// Unexpected target bean mismatch for cached argument -> re-resolve
+					this.cached = false;
+					logger.debug("Failed to resolve cached argument", ex);
 					arguments = resolveMethodArguments(method, bean, beanName);
 				}
 			}
@@ -782,14 +844,13 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 		}
 
 		@Nullable
-		private Object[] resolveCachedArguments(@Nullable String beanName) {
-			Object[] cachedMethodArguments = this.cachedMethodArguments;
+		private Object[] resolveCachedArguments(@Nullable String beanName, @Nullable Object[] cachedMethodArguments) {
 			if (cachedMethodArguments == null) {
 				return null;
 			}
 			Object[] arguments = new Object[cachedMethodArguments.length];
 			for (int i = 0; i < arguments.length; i++) {
-				arguments[i] = resolvedCachedArgument(beanName, cachedMethodArguments[i]);
+				arguments[i] = resolveCachedArgument(beanName, cachedMethodArguments[i]);
 			}
 			return arguments;
 		}
@@ -799,7 +860,7 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 			int argumentCount = method.getParameterCount();
 			Object[] arguments = new Object[argumentCount];
 			DependencyDescriptor[] descriptors = new DependencyDescriptor[argumentCount];
-			Set<String> autowiredBeans = new LinkedHashSet<>(argumentCount);
+			Set<String> autowiredBeanNames = new LinkedHashSet<>(argumentCount * 2);
 			Assert.state(beanFactory != null, "No BeanFactory available");
 			TypeConverter typeConverter = beanFactory.getTypeConverter();
 			for (int i = 0; i < arguments.length; i++) {
@@ -808,8 +869,8 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 				currDesc.setContainingClass(bean.getClass());
 				descriptors[i] = currDesc;
 				try {
-					Object arg = beanFactory.resolveDependency(currDesc, beanName, autowiredBeans, typeConverter);
-					if (arg == null && !this.required) {
+					Object arg = beanFactory.resolveDependency(currDesc, beanName, autowiredBeanNames, typeConverter);
+					if (arg == null && !this.required && !methodParam.isOptional()) {
 						arguments = null;
 						break;
 					}
@@ -822,26 +883,27 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 			synchronized (this) {
 				if (!this.cached) {
 					if (arguments != null) {
-						DependencyDescriptor[] cachedMethodArguments = Arrays.copyOf(descriptors, arguments.length);
-						registerDependentBeans(beanName, autowiredBeans);
-						if (autowiredBeans.size() == argumentCount) {
-							Iterator<String> it = autowiredBeans.iterator();
+						DependencyDescriptor[] cachedMethodArguments = Arrays.copyOf(descriptors, argumentCount);
+						registerDependentBeans(beanName, autowiredBeanNames);
+						if (autowiredBeanNames.size() == argumentCount) {
+							Iterator<String> it = autowiredBeanNames.iterator();
 							Class<?>[] paramTypes = method.getParameterTypes();
 							for (int i = 0; i < paramTypes.length; i++) {
 								String autowiredBeanName = it.next();
 								if (arguments[i] != null && beanFactory.containsBean(autowiredBeanName) &&
 										beanFactory.isTypeMatch(autowiredBeanName, paramTypes[i])) {
 									cachedMethodArguments[i] = new ShortcutDependencyDescriptor(
-											descriptors[i], autowiredBeanName, paramTypes[i]);
+											descriptors[i], autowiredBeanName);
 								}
 							}
 						}
 						this.cachedMethodArguments = cachedMethodArguments;
+						this.cached = true;
 					}
 					else {
 						this.cachedMethodArguments = null;
+						// cached flag remains false
 					}
-					this.cached = true;
 				}
 			}
 			return arguments;
@@ -857,17 +919,14 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 
 		private final String shortcut;
 
-		private final Class<?> requiredType;
-
-		public ShortcutDependencyDescriptor(DependencyDescriptor original, String shortcut, Class<?> requiredType) {
+		public ShortcutDependencyDescriptor(DependencyDescriptor original, String shortcut) {
 			super(original);
 			this.shortcut = shortcut;
-			this.requiredType = requiredType;
 		}
 
 		@Override
 		public Object resolveShortcut(BeanFactory beanFactory) {
-			return beanFactory.getBean(this.shortcut, this.requiredType);
+			return beanFactory.getBean(this.shortcut, getDependencyType());
 		}
 	}
 
@@ -953,7 +1012,7 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 			hints.reflection().registerField(field);
 			CodeBlock resolver = CodeBlock.of("$T.$L($S)",
 					AutowiredFieldValueResolver.class,
-					(!required) ? "forField" : "forRequiredField", field.getName());
+					(!required ? "forField" : "forRequiredField"), field.getName());
 			AccessControl accessControl = AccessControl.forMember(field);
 			if (!accessControl.isAccessibleFrom(targetClassName)) {
 				return CodeBlock.of("$L.resolveAndSet($L, $L)", resolver,
@@ -968,7 +1027,7 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 
 			CodeBlock.Builder code = CodeBlock.builder();
 			code.add("$T.$L", AutowiredMethodArgumentsResolver.class,
-					(!required) ? "forMethod" : "forRequiredMethod");
+					(!required ? "forMethod" : "forRequiredMethod"));
 			code.add("($S", method.getName());
 			if (method.getParameterCount() > 0) {
 				code.add(", $L", generateParameterTypesCode(method.getParameterTypes()));
@@ -991,12 +1050,9 @@ public class AutowiredAnnotationBeanPostProcessor implements SmartInstantiationA
 		}
 
 		private CodeBlock generateParameterTypesCode(Class<?>[] parameterTypes) {
-			CodeBlock.Builder code = CodeBlock.builder();
-			for (int i = 0; i < parameterTypes.length; i++) {
-				code.add(i != 0 ? ", " : "");
-				code.add("$T.class", parameterTypes[i]);
-			}
-			return code.build();
+			return CodeBlock.join(Arrays.stream(parameterTypes)
+					.map(parameterType -> CodeBlock.of("$T.class", parameterType))
+					.toList(), ", ");
 		}
 
 		private void registerHints(RuntimeHints runtimeHints) {

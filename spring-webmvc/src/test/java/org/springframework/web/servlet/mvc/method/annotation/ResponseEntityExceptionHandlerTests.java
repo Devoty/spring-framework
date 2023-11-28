@@ -43,6 +43,8 @@ import org.springframework.http.converter.HttpMessageNotWritableException;
 import org.springframework.stereotype.Controller;
 import org.springframework.validation.BindException;
 import org.springframework.validation.MapBindingResult;
+import org.springframework.validation.method.MethodValidationException;
+import org.springframework.validation.method.MethodValidationResult;
 import org.springframework.web.ErrorResponse;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -58,6 +60,8 @@ import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.context.support.StaticWebApplicationContext;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.DispatcherServlet;
 import org.springframework.web.servlet.ModelAndView;
@@ -69,11 +73,13 @@ import org.springframework.web.testfixture.servlet.MockHttpServletResponse;
 import org.springframework.web.testfixture.servlet.MockServletConfig;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.BDDMockito.mock;
 
 /**
  * Unit tests for {@link ResponseEntityExceptionHandler}.
  *
  * @author Rossen Stoyanchev
+ * @author Sebastien Deleuze
  */
 public class ResponseEntityExceptionHandlerTests {
 
@@ -246,6 +252,16 @@ public class ResponseEntityExceptionHandlerTests {
 	}
 
 	@Test
+	public void handlerMethodValidationException() {
+		testException(new HandlerMethodValidationException(mock(MethodValidationResult.class)));
+	}
+
+	@Test
+	public void methodValidationException() {
+		testException(new MethodValidationException(mock(MethodValidationResult.class)));
+	}
+
+	@Test
 	public void missingServletRequestPart() {
 		testException(new MissingServletRequestPartException("partName"));
 	}
@@ -274,6 +290,11 @@ public class ResponseEntityExceptionHandlerTests {
 	@Test
 	public void asyncRequestTimeoutException() {
 		testException(new AsyncRequestTimeoutException());
+	}
+
+	@Test
+	public void maxUploadSizeExceededException() {
+		testException(new MaxUploadSizeExceededException(1000));
 	}
 
 	@Test
@@ -351,6 +372,7 @@ public class ResponseEntityExceptionHandlerTests {
 	private ResponseEntity<Object> testException(Exception ex) {
 		try {
 			ResponseEntity<Object> entity = this.exceptionHandler.handleException(ex, this.request);
+			assertThat(entity).isNotNull();
 
 			// SPR-9653
 			if (HttpStatus.INTERNAL_SERVER_ERROR.equals(entity.getStatusCode())) {
@@ -383,7 +405,7 @@ public class ResponseEntityExceptionHandlerTests {
 	private static class NestedExceptionThrowingController {
 
 		@RequestMapping("/")
-		public void handleRequest() throws Exception {
+		public void handleRequest() {
 			throw new IllegalStateException(new ServletRequestBindingException("message"));
 		}
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2023-2023 the original author or authors.
+ * Copyright 2002-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.List;
+import java.util.Collections;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Flow;
 
@@ -33,6 +35,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.lang.Nullable;
 import org.springframework.util.StreamUtils;
+import org.springframework.util.StringUtils;
 
 /**
  * {@link ClientHttpRequest} implementation based the Java {@link HttpClient}.
@@ -44,12 +47,10 @@ import org.springframework.util.StreamUtils;
  */
 class JdkClientHttpRequest extends AbstractStreamingClientHttpRequest {
 
-	/*
-	 * The JDK HttpRequest doesn't allow all headers to be set. The named headers are taken from the default
-	 * implementation for HttpRequest.
-	 */
-	private static final List<String> DISALLOWED_HEADERS =
-			List.of("connection", "content-length", "expect", "host", "upgrade");
+	private static final OutputStreamPublisher.ByteMapper<ByteBuffer> BYTE_MAPPER = new ByteBufferMapper();
+
+	private static final Set<String> DISALLOWED_HEADERS = disallowedHeaders();
+
 
 	private final HttpClient httpClient;
 
@@ -65,12 +66,14 @@ class JdkClientHttpRequest extends AbstractStreamingClientHttpRequest {
 
 	public JdkClientHttpRequest(HttpClient httpClient, URI uri, HttpMethod method, Executor executor,
 			@Nullable Duration readTimeout) {
+
 		this.httpClient = httpClient;
 		this.uri = uri;
 		this.method = method;
 		this.executor = executor;
 		this.timeout = readTimeout;
 	}
+
 
 	@Override
 	public HttpMethod getMethod() {
@@ -87,7 +90,8 @@ class JdkClientHttpRequest extends AbstractStreamingClientHttpRequest {
 	protected ClientHttpResponse executeInternal(HttpHeaders headers, @Nullable Body body) throws IOException {
 		try {
 			HttpRequest request = buildRequest(headers, body);
-			HttpResponse<InputStream> response = this.httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+			HttpResponse<InputStream> response =
+					this.httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
 			return new JdkClientHttpResponse(response);
 		}
 		catch (UncheckedIOException ex) {
@@ -101,19 +105,15 @@ class JdkClientHttpRequest extends AbstractStreamingClientHttpRequest {
 
 
 	private HttpRequest buildRequest(HttpHeaders headers, @Nullable Body body) {
-		HttpRequest.Builder builder = HttpRequest.newBuilder()
-				.uri(this.uri);
-
+		HttpRequest.Builder builder = HttpRequest.newBuilder().uri(this.uri);
 		if (this.timeout != null) {
 			builder.timeout(this.timeout);
 		}
 
 		headers.forEach((headerName, headerValues) -> {
-			if (!headerName.equalsIgnoreCase(HttpHeaders.CONTENT_LENGTH)) {
-				if (!DISALLOWED_HEADERS.contains(headerName.toLowerCase())) {
-					for (String headerValue : headerValues) {
-						builder.header(headerName, headerValue);
-					}
+			if (!DISALLOWED_HEADERS.contains(headerName.toLowerCase())) {
+				for (String headerValue : headerValues) {
+					builder.header(headerName, headerValue);
 				}
 			}
 		});
@@ -126,11 +126,14 @@ class JdkClientHttpRequest extends AbstractStreamingClientHttpRequest {
 		if (body != null) {
 			Flow.Publisher<ByteBuffer> outputStreamPublisher = OutputStreamPublisher.create(
 					outputStream -> body.writeTo(StreamUtils.nonClosing(outputStream)),
-					this.executor);
+					BYTE_MAPPER, this.executor);
 
 			long contentLength = headers.getContentLength();
-			if (contentLength != -1) {
+			if (contentLength > 0) {
 				return HttpRequest.BodyPublishers.fromPublisher(outputStreamPublisher, contentLength);
+			}
+			else if (contentLength == 0) {
+				return HttpRequest.BodyPublishers.noBody();
 			}
 			else {
 				return HttpRequest.BodyPublishers.fromPublisher(outputStreamPublisher);
@@ -138,6 +141,45 @@ class JdkClientHttpRequest extends AbstractStreamingClientHttpRequest {
 		}
 		else {
 			return HttpRequest.BodyPublishers.noBody();
+		}
+	}
+
+	/**
+	 * By default, {@link HttpRequest} does not allow {@code Connection},
+	 * {@code Content-Length}, {@code Expect}, {@code Host}, or {@code Upgrade}
+	 * headers to be set, but this can be overriden with the
+	 * {@code jdk.httpclient.allowRestrictedHeaders} system property.
+	 * @see jdk.internal.net.http.common.Utils#getDisallowedHeaders()
+	 */
+	private static Set<String> disallowedHeaders() {
+		TreeSet<String> headers = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+		headers.addAll(Set.of("connection", "content-length", "expect", "host", "upgrade"));
+
+		String headersToAllow = System.getProperty("jdk.httpclient.allowRestrictedHeaders");
+		if (headersToAllow != null) {
+			Set<String> toAllow = StringUtils.commaDelimitedListToSet(headersToAllow);
+			headers.removeAll(toAllow);
+		}
+		return Collections.unmodifiableSet(headers);
+	}
+
+
+	private static final class ByteBufferMapper implements OutputStreamPublisher.ByteMapper<ByteBuffer> {
+
+		@Override
+		public ByteBuffer map(int b) {
+			ByteBuffer byteBuffer = ByteBuffer.allocate(1);
+			byteBuffer.put((byte) b);
+			byteBuffer.flip();
+			return byteBuffer;
+		}
+
+		@Override
+		public ByteBuffer map(byte[] b, int off, int len) {
+			ByteBuffer byteBuffer = ByteBuffer.allocate(len);
+			byteBuffer.put(b, off, len);
+			byteBuffer.flip();
+			return byteBuffer;
 		}
 	}
 

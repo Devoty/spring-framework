@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @author Mark Paluch
  * @author Christoph Strobl
  */
-public abstract class AbstractTransactionalDatabaseClientIntegrationTests  {
+abstract class AbstractTransactionalDatabaseClientIntegrationTests {
 
 	private ConnectionFactory connectionFactory;
 
@@ -69,7 +69,7 @@ public abstract class AbstractTransactionalDatabaseClientIntegrationTests  {
 		Mono.from(connectionFactory.create())
 				.flatMapMany(connection -> Flux.from(connection.createStatement("DROP TABLE legoset").execute())
 						.flatMap(Result::getRowsUpdated)
-						.onErrorResume(e -> Mono.empty())
+						.onErrorComplete()
 						.thenMany(connection.createStatement(getCreateTableStatement()).execute())
 						.flatMap(Result::getRowsUpdated).thenMany(connection.close())).as(StepVerifier::create).verifyComplete();
 
@@ -184,8 +184,8 @@ public abstract class AbstractTransactionalDatabaseClientIntegrationTests  {
 	}
 
 	private Condition<? super Object> numberOf(int expected) {
-		return new Condition<>(object -> object instanceof Number &&
-				((Number) object).intValue() == expected, "Number  %d", expected);
+		return new Condition<>(object -> object instanceof Number num &&
+				num.intValue() == expected, "Number %d", expected);
 	}
 
 

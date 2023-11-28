@@ -475,19 +475,14 @@ public final class RequestMappingInfo implements RequestCondition<RequestMapping
 
 	@Override
 	public boolean equals(@Nullable Object other) {
-		if (this == other) {
-			return true;
-		}
-		if (!(other instanceof RequestMappingInfo otherInfo)) {
-			return false;
-		}
-		return (getActivePatternsCondition().equals(otherInfo.getActivePatternsCondition()) &&
-				this.methodsCondition.equals(otherInfo.methodsCondition) &&
-				this.paramsCondition.equals(otherInfo.paramsCondition) &&
-				this.headersCondition.equals(otherInfo.headersCondition) &&
-				this.consumesCondition.equals(otherInfo.consumesCondition) &&
-				this.producesCondition.equals(otherInfo.producesCondition) &&
-				this.customConditionHolder.equals(otherInfo.customConditionHolder));
+		return (this == other || (other instanceof RequestMappingInfo that &&
+				getActivePatternsCondition().equals(that.getActivePatternsCondition()) &&
+				this.methodsCondition.equals(that.methodsCondition) &&
+				this.paramsCondition.equals(that.paramsCondition) &&
+				this.headersCondition.equals(that.headersCondition) &&
+				this.consumesCondition.equals(that.consumesCondition) &&
+				this.producesCondition.equals(that.producesCondition) &&
+				this.customConditionHolder.equals(that.customConditionHolder)));
 	}
 
 	@Override
@@ -710,27 +705,28 @@ public final class RequestMappingInfo implements RequestCondition<RequestMapping
 		@SuppressWarnings("deprecation")
 		public RequestMappingInfo build() {
 
-			PathPatternsRequestCondition pathPatterns = null;
-			PatternsRequestCondition patterns = null;
+			PathPatternsRequestCondition pathPatternsCondition = null;
+			PatternsRequestCondition patternsCondition = null;
 
-			if (this.options.patternParser != null) {
-				pathPatterns = (ObjectUtils.isEmpty(this.paths) ?
-						EMPTY_PATH_PATTERNS :
-						new PathPatternsRequestCondition(this.options.patternParser, this.paths));
-			}
-			else {
-				patterns = (ObjectUtils.isEmpty(this.paths) ?
+			if (this.options.getPathMatcher() != null) {
+				patternsCondition = (ObjectUtils.isEmpty(this.paths) ?
 						EMPTY_PATTERNS :
 						new PatternsRequestCondition(
 								this.paths, null, this.options.getPathMatcher(),
 								this.options.useSuffixPatternMatch(), this.options.useTrailingSlashMatch(),
 								this.options.getFileExtensions()));
 			}
+			else {
+				PathPatternParser parser = (this.options.getPatternParser() != null ?
+						this.options.getPatternParser() : new PathPatternParser());
+				pathPatternsCondition = (ObjectUtils.isEmpty(this.paths) ?
+						EMPTY_PATH_PATTERNS : new PathPatternsRequestCondition(parser, this.paths));
+			}
 
 			ContentNegotiationManager manager = this.options.getContentNegotiationManager();
 
 			return new RequestMappingInfo(
-					this.mappingName, pathPatterns, patterns,
+					this.mappingName, pathPatternsCondition, patternsCondition,
 					ObjectUtils.isEmpty(this.methods) ?
 							EMPTY_REQUEST_METHODS : new RequestMethodsRequestCondition(this.methods),
 					ObjectUtils.isEmpty(this.params) ?
@@ -742,8 +738,7 @@ public final class RequestMappingInfo implements RequestCondition<RequestMapping
 					ObjectUtils.isEmpty(this.produces) && !this.hasAccept ?
 							EMPTY_PRODUCES : new ProducesRequestCondition(this.produces, this.headers, manager),
 					this.customCondition != null ?
-							new RequestConditionHolder(this.customCondition) : EMPTY_CUSTOM,
-					this.options);
+							new RequestConditionHolder(this.customCondition) : EMPTY_CUSTOM, this.options);
 		}
 	}
 
@@ -899,7 +894,9 @@ public final class RequestMappingInfo implements RequestCondition<RequestMapping
 		 * {@link AbstractHandlerMapping#setPatternParser(PathPatternParser)}.
 		 * <p><strong>Note:</strong> This property is mutually exclusive with
 		 * {@link #setPathMatcher(PathMatcher)}.
-		 * <p>By default this is not enabled.
+		 * <p>By default this is not set, but {@link RequestMappingInfo.Builder}
+		 * defaults to using {@link PathPatternParser} unless
+		 * {@link #setPathMatcher(PathMatcher)} is explicitly set.
 		 * @since 5.3
 		 */
 		public void setPatternParser(@Nullable PathPatternParser patternParser) {
@@ -941,7 +938,9 @@ public final class RequestMappingInfo implements RequestCondition<RequestMapping
 
 		/**
 		 * Set a custom PathMatcher to use for the PatternsRequestCondition.
-		 * <p>By default this is not set.
+		 * <p>By default this is not set. You must set it explicitly if you want
+		 * {@link PathMatcher} to be used, or otherwise {@link RequestMappingInfo}
+		 * defaults to using {@link PathPatternParser}.
 		 */
 		public void setPathMatcher(@Nullable PathMatcher pathMatcher) {
 			this.pathMatcher = pathMatcher;

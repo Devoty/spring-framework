@@ -27,7 +27,6 @@ import org.springframework.http.HttpMethod;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
-
 /**
  * {@link ClientHttpRequestFactory} implementation based on the Java
  * {@link HttpClient}.
@@ -87,6 +86,17 @@ public class JdkClientHttpRequestFactory implements ClientHttpRequestFactory {
 	 */
 	public void setReadTimeout(int readTimeout) {
 		this.readTimeout = Duration.ofMillis(readTimeout);
+	}
+
+	/**
+	 * Set the underlying {@code HttpClient}'s read timeout as a
+	 * {@code Duration}.
+	 * <p>Default is the system's default timeout.
+	 * @see java.net.http.HttpRequest.Builder#timeout
+	 */
+	public void setReadTimeout(Duration readTimeout) {
+		Assert.notNull(readTimeout, "ReadTimeout must not be null");
+		this.readTimeout = readTimeout;
 	}
 
 

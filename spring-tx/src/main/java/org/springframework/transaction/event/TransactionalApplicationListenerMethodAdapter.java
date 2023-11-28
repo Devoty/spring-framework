@@ -25,10 +25,6 @@ import org.springframework.context.event.ApplicationListenerMethodAdapter;
 import org.springframework.context.event.EventListener;
 import org.springframework.context.event.GenericApplicationListener;
 import org.springframework.core.annotation.AnnotatedElementUtils;
-import org.springframework.scheduling.annotation.Async;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.Assert;
 
 /**
@@ -51,9 +47,9 @@ import org.springframework.util.Assert;
 public class TransactionalApplicationListenerMethodAdapter extends ApplicationListenerMethodAdapter
 		implements TransactionalApplicationListener<ApplicationEvent> {
 
-	private final TransactionalEventListener annotation;
-
 	private final TransactionPhase transactionPhase;
+
+	private final boolean fallbackExecution;
 
 	private final List<SynchronizationCallback> callbacks = new CopyOnWriteArrayList<>();
 
@@ -67,18 +63,12 @@ public class TransactionalApplicationListenerMethodAdapter extends ApplicationLi
 	public TransactionalApplicationListenerMethodAdapter(String beanName, Class<?> targetClass, Method method) {
 		super(beanName, targetClass, method);
 		TransactionalEventListener eventAnn =
-				AnnotatedElementUtils.findMergedAnnotation(method, TransactionalEventListener.class);
+				AnnotatedElementUtils.findMergedAnnotation(getTargetMethod(), TransactionalEventListener.class);
 		if (eventAnn == null) {
 			throw new IllegalStateException("No TransactionalEventListener annotation found on method: " + method);
 		}
-		Transactional txAnn = AnnotatedElementUtils.findMergedAnnotation(method, Transactional.class);
-		if (txAnn != null && txAnn.propagation() != Propagation.REQUIRES_NEW &&
-				!AnnotatedElementUtils.hasAnnotation(method, Async.class)) {
-			throw new IllegalStateException("@TransactionalEventListener method must not be annotated with " +
-					"@Transactional unless when marked as REQUIRES_NEW or declared as @Async: " + method);
-		}
-		this.annotation = eventAnn;
 		this.transactionPhase = eventAnn.phase();
+		this.fallbackExecution = eventAnn.fallbackExecution();
 	}
 
 
@@ -96,13 +86,13 @@ public class TransactionalApplicationListenerMethodAdapter extends ApplicationLi
 
 	@Override
 	public void onApplicationEvent(ApplicationEvent event) {
-		if (TransactionSynchronizationManager.isSynchronizationActive() &&
-				TransactionSynchronizationManager.isActualTransactionActive()) {
-			TransactionSynchronizationManager.registerSynchronization(
-					new TransactionalApplicationListenerSynchronization<>(event, this, this.callbacks));
+		if (TransactionalApplicationListenerSynchronization.register(event, this, this.callbacks)) {
+			if (logger.isDebugEnabled()) {
+				logger.debug("Registered transaction synchronization for " + event);
+			}
 		}
-		else if (this.annotation.fallbackExecution()) {
-			if (this.annotation.phase() == TransactionPhase.AFTER_ROLLBACK && logger.isWarnEnabled()) {
+		else if (this.fallbackExecution) {
+			if (getTransactionPhase() == TransactionPhase.AFTER_ROLLBACK && logger.isWarnEnabled()) {
 				logger.warn("Processing " + event + " as a fallback execution on AFTER_ROLLBACK phase");
 			}
 			processEvent(event);

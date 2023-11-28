@@ -16,7 +16,6 @@
 
 package org.springframework.web.servlet.mvc.method.annotation;
 
-import java.beans.ConstructorProperties;
 import java.beans.PropertyEditorSupport;
 import java.io.IOException;
 import java.io.Serializable;
@@ -114,6 +113,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 import org.springframework.web.accept.ContentNegotiationManagerFactoryBean;
 import org.springframework.web.bind.WebDataBinder;
+import org.springframework.web.bind.annotation.BindParam;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -2057,6 +2057,26 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 	}
 
 	@PathPatternsParameterizedTest
+	void dataClassBindingWithAdditionalSetterInDeclarativeBindingMode(boolean usePathPatterns) throws Exception {
+		initDispatcherServlet(DataClassController.class, usePathPatterns, wac -> {
+			ConfigurableWebBindingInitializer initializer = new ConfigurableWebBindingInitializer();
+			initializer.setDeclarativeBinding(true);
+
+			RootBeanDefinition mappingDef = new RootBeanDefinition(RequestMappingHandlerAdapter.class);
+			mappingDef.getPropertyValues().add("webBindingInitializer", initializer);
+			wac.registerBeanDefinition("handlerAdapter", mappingDef);
+		});
+
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/bind");
+		request.addParameter("param1", "value1");
+		request.addParameter("param2", "true");
+		request.addParameter("param3", "3");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		getServlet().service(request, response);
+		assertThat(response.getContentAsString()).isEqualTo("value1-true-0");
+	}
+
+	@PathPatternsParameterizedTest
 	void dataClassBindingWithResult(boolean usePathPatterns) throws Exception {
 		initDispatcherServlet(ValidatedDataClassController.class, usePathPatterns);
 
@@ -3600,7 +3620,7 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 		List<E> find(boolean sort, P predicate) throws IOException;
 	}
 
-	static abstract class Entity {
+	abstract static class Entity {
 
 		public UUID id;
 
@@ -3618,7 +3638,7 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 		public String content;
 	}
 
-	static abstract class EntityPredicate<E extends Entity> {
+	abstract static class EntityPredicate<E extends Entity> {
 
 		public String createdBy;
 
@@ -3736,7 +3756,7 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 		}
 	}
 
-	static abstract class MyAbstractController {
+	abstract static class MyAbstractController {
 
 		@RequestMapping("/handle")
 		public abstract void handle(Writer writer) throws IOException;
@@ -3752,7 +3772,7 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 	}
 
 	@Controller
-	static class TrailingSlashController  {
+	static class TrailingSlashController {
 
 		@RequestMapping(value = "/", method = RequestMethod.GET)
 		public void root(Writer writer) throws IOException {
@@ -4057,8 +4077,7 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 
 		private int param3;
 
-		@ConstructorProperties({"param1", "param2", "optionalParam"})
-		public DataClass(String param1, boolean p2, Optional<Integer> optionalParam) {
+		public DataClass(String param1, @BindParam("param2") boolean p2, Optional<Integer> optionalParam) {
 			this.param1 = param1;
 			this.param2 = p2;
 			Assert.notNull(optionalParam, "Optional must not be null");
@@ -4152,8 +4171,9 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 
 		public int param3;
 
-		@ConstructorProperties({"param1", "param2", "optionalParam"})
-		public MultipartFileDataClass(MultipartFile param1, boolean p2, Optional<Integer> optionalParam) {
+		public MultipartFileDataClass(
+				MultipartFile param1, @BindParam("param2") boolean p2, Optional<Integer> optionalParam) {
+
 			this.param1 = param1;
 			this.param2 = p2;
 			Assert.notNull(optionalParam, "Optional must not be null");
@@ -4184,8 +4204,7 @@ class ServletAnnotationControllerHandlerMethodTests extends AbstractServletHandl
 
 		public int param3;
 
-		@ConstructorProperties({"param1", "param2", "optionalParam"})
-		public ServletPartDataClass(Part param1, boolean p2, Optional<Integer> optionalParam) {
+		public ServletPartDataClass(Part param1, @BindParam("param2") boolean p2, Optional<Integer> optionalParam) {
 			this.param1 = param1;
 			this.param2 = p2;
 			Assert.notNull(optionalParam, "Optional must not be null");

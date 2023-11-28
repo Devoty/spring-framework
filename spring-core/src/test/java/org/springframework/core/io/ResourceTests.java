@@ -33,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Base64;
 import java.util.stream.Stream;
 
 import okhttp3.mockwebserver.Dispatcher;
@@ -173,8 +174,8 @@ class ResourceTests {
 			Resource resource = new ByteArrayResource("testString".getBytes(), "my description");
 			assertThat(resource.getDescription().contains("my description")).isTrue();
 		}
-
 	}
+
 
 	@Nested
 	class InputStreamResourceTests {
@@ -214,6 +215,7 @@ class ResourceTests {
 			assertThat(resource.getDescription().contains("my description")).isTrue();
 		}
 	}
+
 
 	@Nested
 	class FileSystemResourceTests {
@@ -285,6 +287,7 @@ class ResourceTests {
 			assertThat(resource.getURI().toString()).matches("^file:\\/[^\\/].+test1\\.txt$");
 		}
 	}
+
 
 	@Nested
 	class UrlResourceTests {
@@ -377,6 +380,19 @@ class ResourceTests {
 			assertThat(request.getHeader("Framework-Name")).isEqualTo("Spring");
 		}
 
+		@Test
+		void useUserInfoToSetBasicAuth() throws Exception {
+			startServer();
+			UrlResource resource = new UrlResource("http://alice:secret@localhost:"
+					+ this.server.getPort() + "/resource");
+			assertThat(resource.getInputStream()).hasContent("Spring");
+			RecordedRequest request = this.server.takeRequest();
+			String authorization = request.getHeader("Authorization");
+			assertThat(authorization).isNotNull().startsWith("Basic ");
+			assertThat(new String(Base64.getDecoder().decode(
+					authorization.substring(6)), StandardCharsets.ISO_8859_1)).isEqualTo("alice:secret");
+		}
+
 		@AfterEach
 		void shutdown() throws Exception {
 			this.server.shutdown();
@@ -420,6 +436,7 @@ class ResourceTests {
 			}
 		}
 	}
+
 
 	@Nested
 	class AbstractResourceTests {
@@ -465,7 +482,6 @@ class ResourceTests {
 			};
 			assertThat(resource.contentLength()).isEqualTo(3L);
 		}
-
 	}
 
 }

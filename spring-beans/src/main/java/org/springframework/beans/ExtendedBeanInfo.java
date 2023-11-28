@@ -30,6 +30,7 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -192,14 +193,14 @@ class ExtendedBeanInfo implements BeanInfo {
 			if (pd instanceof IndexedPropertyDescriptor indexedPd) {
 				candidateType = indexedPd.getIndexedPropertyType();
 				if (candidateName.equals(propertyName) &&
-						(candidateType.equals(propertyType) || candidateType.equals(propertyType.getComponentType()))) {
+						(candidateType.equals(propertyType) || candidateType.equals(propertyType.componentType()))) {
 					return pd;
 				}
 			}
 			else {
 				candidateType = pd.getPropertyType();
 				if (candidateName.equals(propertyName) &&
-						(candidateType.equals(propertyType) || propertyType.equals(candidateType.getComponentType()))) {
+						(candidateType.equals(propertyType) || propertyType.equals(candidateType.componentType()))) {
 					return pd;
 				}
 			}
@@ -338,14 +339,14 @@ class ExtendedBeanInfo implements BeanInfo {
 		}
 
 		@Override
-		public boolean equals(@Nullable Object obj) {
-			return (this == obj || (obj instanceof PropertyDescriptor that &&
+		public boolean equals(@Nullable Object other) {
+			return (this == other || (other instanceof PropertyDescriptor that &&
 					PropertyDescriptorUtils.equals(this, that)));
 		}
 
 		@Override
 		public int hashCode() {
-			return (ObjectUtils.nullSafeHashCode(getReadMethod()) * 29 + ObjectUtils.nullSafeHashCode(getWriteMethod()));
+			return Objects.hash(getReadMethod(), getWriteMethod());
 		}
 
 		@Override
@@ -491,25 +492,17 @@ class ExtendedBeanInfo implements BeanInfo {
 		 */
 		@Override
 		public boolean equals(@Nullable Object other) {
-			if (this == other) {
-				return true;
-			}
-			if (!(other instanceof IndexedPropertyDescriptor otherPd)) {
-				return false;
-			}
-			return (ObjectUtils.nullSafeEquals(getIndexedReadMethod(), otherPd.getIndexedReadMethod()) &&
-					ObjectUtils.nullSafeEquals(getIndexedWriteMethod(), otherPd.getIndexedWriteMethod()) &&
-					ObjectUtils.nullSafeEquals(getIndexedPropertyType(), otherPd.getIndexedPropertyType()) &&
-					PropertyDescriptorUtils.equals(this, otherPd));
+			return (this == other || (other instanceof IndexedPropertyDescriptor that &&
+					ObjectUtils.nullSafeEquals(getIndexedReadMethod(), that.getIndexedReadMethod()) &&
+					ObjectUtils.nullSafeEquals(getIndexedWriteMethod(), that.getIndexedWriteMethod()) &&
+					ObjectUtils.nullSafeEquals(getIndexedPropertyType(), that.getIndexedPropertyType()) &&
+					PropertyDescriptorUtils.equals(this, that)));
 		}
 
 		@Override
 		public int hashCode() {
-			int hashCode = ObjectUtils.nullSafeHashCode(getReadMethod());
-			hashCode = 29 * hashCode + ObjectUtils.nullSafeHashCode(getWriteMethod());
-			hashCode = 29 * hashCode + ObjectUtils.nullSafeHashCode(getIndexedReadMethod());
-			hashCode = 29 * hashCode + ObjectUtils.nullSafeHashCode(getIndexedWriteMethod());
-			return hashCode;
+			return Objects.hash(getReadMethod(), getWriteMethod(),
+					getIndexedReadMethod(), getIndexedWriteMethod());
 		}
 
 		@Override

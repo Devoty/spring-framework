@@ -18,6 +18,7 @@ package org.springframework.http.client;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.Cache;
@@ -35,7 +36,10 @@ import org.springframework.util.Assert;
  * @author Arjen Poutsma
  * @author Roy Clarkson
  * @since 4.3
+ * @deprecated since 6.1, in favor of other {@link ClientHttpRequestFactory}
+ * implementations; scheduled for removal in 6.2
  */
+@Deprecated(since = "6.1", forRemoval = true)
 public class OkHttp3ClientHttpRequestFactory implements ClientHttpRequestFactory, DisposableBean {
 
 	private OkHttpClient client;
@@ -73,12 +77,34 @@ public class OkHttp3ClientHttpRequestFactory implements ClientHttpRequestFactory
 	}
 
 	/**
+	 * Set the underlying read timeout in milliseconds.
+	 * A value of 0 specifies an infinite timeout.
+	 * @since 6.1
+	 */
+	public void setReadTimeout(Duration readTimeout) {
+		this.client = this.client.newBuilder()
+				.readTimeout(readTimeout)
+				.build();
+	}
+
+	/**
 	 * Set the underlying write timeout in milliseconds.
 	 * A value of 0 specifies an infinite timeout.
 	 */
 	public void setWriteTimeout(int writeTimeout) {
 		this.client = this.client.newBuilder()
 				.writeTimeout(writeTimeout, TimeUnit.MILLISECONDS)
+				.build();
+	}
+
+	/**
+	 * Set the underlying write timeout in milliseconds.
+	 * A value of 0 specifies an infinite timeout.
+	 * @since 6.1
+	 */
+	public void setWriteTimeout(Duration writeTimeout) {
+		this.client = this.client.newBuilder()
+				.writeTimeout(writeTimeout)
 				.build();
 	}
 
@@ -92,8 +118,20 @@ public class OkHttp3ClientHttpRequestFactory implements ClientHttpRequestFactory
 				.build();
 	}
 
+	/**
+	 * Set the underlying connect timeout in milliseconds.
+	 * A value of 0 specifies an infinite timeout.
+	 * @since 6.1
+	 */
+	public void setConnectTimeout(Duration connectTimeout) {
+		this.client = this.client.newBuilder()
+				.connectTimeout(connectTimeout)
+				.build();
+	}
+
 
 	@Override
+	@SuppressWarnings("removal")
 	public ClientHttpRequest createRequest(URI uri, HttpMethod httpMethod) {
 		return new OkHttp3ClientHttpRequest(this.client, uri, httpMethod);
 	}

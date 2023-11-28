@@ -165,11 +165,27 @@ class AnnotationDrivenEventListenerTests {
 		assertThat(events).as("Wrong number of initial context events").hasSize(1);
 		assertThat(events.get(0).getClass()).isEqualTo(ContextRefreshedEvent.class);
 
+		this.context.start();
+		List<Object> eventsAfterStart = this.eventCollector.getEvents(listener);
+		assertThat(eventsAfterStart).as("Wrong number of context events on start").hasSize(2);
+		assertThat(eventsAfterStart.get(1).getClass()).isEqualTo(ContextStartedEvent.class);
+		this.eventCollector.assertTotalEventsCount(2);
+
 		this.context.stop();
 		List<Object> eventsAfterStop = this.eventCollector.getEvents(listener);
-		assertThat(eventsAfterStop).as("Wrong number of context events on shutdown").hasSize(2);
-		assertThat(eventsAfterStop.get(1).getClass()).isEqualTo(ContextStoppedEvent.class);
-		this.eventCollector.assertTotalEventsCount(2);
+		assertThat(eventsAfterStop).as("Wrong number of context events on stop").hasSize(3);
+		assertThat(eventsAfterStop.get(2).getClass()).isEqualTo(ContextStoppedEvent.class);
+		this.eventCollector.assertTotalEventsCount(3);
+
+		this.context.close();
+		List<Object> eventsAfterClose = this.eventCollector.getEvents(listener);
+		assertThat(eventsAfterClose).as("Wrong number of context events on close").hasSize(4);
+		assertThat(eventsAfterClose.get(3).getClass()).isEqualTo(ContextClosedEvent.class);
+		this.eventCollector.assertTotalEventsCount(4);
+
+		// Further events are supposed to be ignored after context close
+		this.context.publishEvent(new ContextClosedEvent(this.context));
+		this.eventCollector.assertTotalEventsCount(4);
 	}
 
 	@Test
@@ -517,7 +533,6 @@ class AnnotationDrivenEventListenerTests {
 		ReplyEventListener replyEventListener = this.context.getBean(ReplyEventListener.class);
 		TestEventListener listener = this.context.getBean(TestEventListener.class);
 
-
 		this.eventCollector.assertNoEventReceived(listener);
 		this.eventCollector.assertNoEventReceived(replyEventListener);
 		this.context.publishEvent(event);
@@ -634,6 +649,17 @@ class AnnotationDrivenEventListenerTests {
 		assertThat(listener.order).contains("first", "second", "third");
 	}
 
+	@Test
+	void publicSubclassWithInheritedEventListener() {
+		load(PublicSubclassWithInheritedEventListener.class);
+		TestEventListener listener = this.context.getBean(PublicSubclassWithInheritedEventListener.class);
+
+		this.eventCollector.assertNoEventReceived(listener);
+		this.context.publishEvent("test");
+		this.eventCollector.assertEvent(listener, "test");
+		this.eventCollector.assertTotalEventsCount(1);
+	}
+
 	@Test @Disabled  // SPR-15122
 	void listenersReceiveEarlyEvents() {
 		load(EventOnPostConstruct.class, OrderedTestListener.class);
@@ -646,7 +672,7 @@ class AnnotationDrivenEventListenerTests {
 	void missingListenerBeanIgnored() {
 		load(MissingEventListener.class);
 		context.getBean(UseMissingEventListener.class);
-		context.getBean(ApplicationEventMulticaster.class).multicastEvent(new TestEvent(this));
+		context.publishEvent(new TestEvent(this));
 	}
 
 
@@ -703,7 +729,7 @@ class AnnotationDrivenEventListenerTests {
 	}
 
 
-	static abstract class AbstractTestEventListener extends AbstractIdentifiable {
+	abstract static class AbstractTestEventListener extends AbstractIdentifiable {
 
 		@Autowired
 		private EventCollector eventCollector;
@@ -753,7 +779,6 @@ class AnnotationDrivenEventListenerTests {
 		public void handleContextEvent(ApplicationContextEvent event) {
 			collectEvent(event);
 		}
-
 	}
 
 
@@ -979,7 +1004,6 @@ class AnnotationDrivenEventListenerTests {
 	}
 
 
-
 	@EventListener
 	@Retention(RetentionPolicy.RUNTIME)
 	public @interface ConditionalEvent {
@@ -1031,7 +1055,7 @@ class AnnotationDrivenEventListenerTests {
 	}
 
 
-	@Configuration
+	@Component
 	static class OrderedTestListener extends TestEventListener {
 
 		public final List<String> order = new ArrayList<>();
@@ -1052,6 +1076,11 @@ class AnnotationDrivenEventListenerTests {
 		public void handleSecond(String payload) {
 			this.order.add("second");
 		}
+	}
+
+
+	@Component
+	public static class PublicSubclassWithInheritedEventListener extends TestEventListener {
 	}
 
 
